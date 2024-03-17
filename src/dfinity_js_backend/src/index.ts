@@ -4,15 +4,14 @@ import {
   Record,
   StableBTreeMap,
   Vec,
-  match,
   Result,
-  nat64,
   ic,
   Opt,
+  nat64,
 } from "azle";
 import { v4 as uuidv4 } from "uuid";
 
-
+// Define record types
 type Course = Record<{
   id: string;
   name: string;
@@ -21,7 +20,7 @@ type Course = Record<{
   updatedAt: Opt<nat64>;
 }>;
 
-  type Flashcard = Record<{
+type Flashcard = Record<{
   id: string;
   term: string;
   definition: string;
@@ -30,9 +29,7 @@ type Course = Record<{
   updatedAt: Opt<nat64>;
 }>;
 
-
-
- type Quiz = Record<{
+type Quiz = Record<{
   id: string;
   question: string;
   options: Vec<string>;
@@ -42,31 +39,28 @@ type Course = Record<{
   updatedAt: Opt<nat64>;
 }>;
 
-
 type User = Record<{
-id: string;
-name: string;
-email: string;
-courses: Vec<string>;
-progress: string;
-goals: string;
-createdAt: nat64;
-updatedAt: Opt<nat64>;
+  id: string;
+  name: string;
+  email: string;
+  courses: Vec<string>;
+  progress: string;
+  goals: string;
+  createdAt: nat64;
+  updatedAt: Opt<nat64>;
 }>;
 
-
+// Define payload types
 type CoursePayload = Record<{
   name: string;
   description: string;
 }>;
-
 
 type FlashcardPayload = Record<{
   term: string;
   definition: string;
   courseId: string;
 }>;
-
 
 type QuizPayload = Record<{
   question: string;
@@ -78,15 +72,20 @@ type QuizPayload = Record<{
 type UserPayload = Record<{
   name: string;
   email: string;
-  progress:string;
-  goals:string
+  progress: string;
+  goals: string;
 }>;
 
+// Initialize storage maps
+const courseStorage = new StableBTreeMap<string, Course>(0);
+const flashcardStorage = new StableBTreeMap<string, Flashcard>(1);
+const quizStorage = new StableBTreeMap<string, Quiz>(2);
+const userStorage = new StableBTreeMap<string, User>(3);
 
-const courseStorage = new StableBTreeMap<string, Course>(0, 44, 1024);
-const flashcardStorage = new StableBTreeMap<string, Flashcard>(1, 44, 1024);
-const quizStorage = new StableBTreeMap<string, Quiz>(2, 44, 1024);
-const userStorage = new StableBTreeMap<string, User>(3, 44, 1024);
+// Helper function to handle common result logic
+function handleResult<T>(value: T | null, errorMsg: string): Result<T, string> {
+  return value ? Result.Ok(value) : Result.Err(errorMsg);
+}
 
 $update;
 export function createCourse(payload: CoursePayload): Result<Course, string> {
@@ -103,10 +102,7 @@ export function createCourse(payload: CoursePayload): Result<Course, string> {
 
 $query;
 export function getCourse(id: string): Result<Course, string> {
-  return match(courseStorage.get(id), {
-    Some: (course) => Result.Ok<Course, string>(course),
-    None: () => Result.Err<Course, string>(`Course with ID=${id} not found.`),
-  });
+  return handleResult(courseStorage.get(id), `Course with ID=${id} not found.`);
 }
 
 $query;
@@ -116,33 +112,27 @@ export function getAllCourses(): Result<Vec<Course>, string> {
 
 $update;
 export function updateCourse(id: string, payload: CoursePayload): Result<Course, string> {
-  return match(courseStorage.get(id), {
-    Some: (existingCourse) => {
+  return handleResult(courseStorage.get(id), `Course with ID=${id} not found.`)
+    .map(existingCourse => {
       const updatedCourse: Course = {
         ...existingCourse,
         ...payload,
         updatedAt: Opt.Some(ic.time()),
       };
-
       courseStorage.insert(updatedCourse.id, updatedCourse);
-      return Result.Ok<Course, string>(updatedCourse);
-    },
-    None: () => Result.Err<Course, string>(`Course with ID=${id} not found.`),
-  });
+      return updatedCourse;
+    });
 }
 
-
- $update;
+$update;
 export function deleteCourse(id: string): Result<Course, string> {
-  return match(courseStorage.get(id), {
-    Some: (existingCourse) => {
-      courseStorage.remove(id);
-      return Result.Ok<Course, string>(existingCourse);
-    },
-    None: () => Result.Err<Course, string>(`Course with ID=${id} not found.`),
-  });
+  const course = courseStorage.get(id);
+  if (!course) {
+    return Result.Err(`Course with ID=${id} not found.`);
+  }
+  courseStorage.remove(id);
+  return Result.Ok(course);
 }
-
 
 $update;
 export function createFlashcard(payload: FlashcardPayload): Result<Flashcard, string> {
