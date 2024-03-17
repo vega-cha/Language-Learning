@@ -77,10 +77,10 @@ type UserPayload = Record<{
 }>;
 
 // Initialize storage maps
-const courseStorage = new StableBTreeMap<string, Course>(0);
-const flashcardStorage = new StableBTreeMap<string, Flashcard>(1);
-const quizStorage = new StableBTreeMap<string, Quiz>(2);
-const userStorage = new StableBTreeMap<string, User>(3);
+const courseStorage = new StableBTreeMap<string, Course>(0, 44, 1024);
+const flashcardStorage = new StableBTreeMap<string, Flashcard>(1, 44, 1024);
+const quizStorage = new StableBTreeMap<string, Quiz>(2, 44, 1024);
+const userStorage = new StableBTreeMap<string, User>(3, 44, 1024);
 
 // Helper function to handle common result logic
 function handleResult<T>(value: T | null, errorMsg: string): Result<T, string> {
