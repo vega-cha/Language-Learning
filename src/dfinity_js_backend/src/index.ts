@@ -1,253 +1,446 @@
 import {
-  $query,
-  $update,
+  query,
+  update,
+  text,
   Record,
   StableBTreeMap,
+  Variant,
   Vec,
-  match,
-  Result,
-  nat64,
+  None,
+  Some,
+  Ok,
+  Err,
   ic,
+  Principal,
   Opt,
+  nat64,
+  Duration,
+  Result,
+  bool,
+  Canister,
+  init,
 } from "azle";
+import {
+  Ledger,
+  binaryAddressFromAddress,
+  binaryAddressFromPrincipal,
+  hexAddressFromPrincipal,
+} from "azle/canisters/ledger";
+//@ts-ignore
+import { hashCode } from "hashcode";
 import { v4 as uuidv4 } from "uuid";
 
+const Course = Record({
+  id: text,
+  name: text,
+  imageUrl: text,
+  description: text,
+  pricePerCourse: nat64,
+  isReserved: bool,
+  isAvailable: bool,
+  currentReservedTo: Opt(Principal),
+  currentReservationEnds: Opt(nat64),
+  creator: Principal,
+});
 
-type Course = Record<{
-  id: string;
-  name: string;
-  description: string;
-  createdAt: nat64;
-  updatedAt: Opt<nat64>;
-}>;
+const CoursePayload = Record({
+  name: text,
+  imageUrl: text,
+  description: text,
+  pricePerCourse: nat64,
+});
 
-  type Flashcard = Record<{
-  id: string;
-  term: string;
-  definition: string;
-  courseId: string;
-  createdAt: nat64;
-  updatedAt: Opt<nat64>;
-}>;
+const FlashCard = Record({
+  id: text,
+  term: text,
+  definition: text,
+  courseId: text,
+  createdAt: nat64,
+});
 
+const FlashCardPayload = Record({
+  term: text,
+  definition: text,
+  courseId: text,
+});
 
+const Quiz = Record({
+  id: text,
+  question: text,
+  options: Vec(text),
+  correctAnswer: text,
+  courseId: text,
+  createdAt: nat64,
+});
 
- type Quiz = Record<{
-  id: string;
-  question: string;
-  options: Vec<string>;
-  correctAnswer: string;
-  courseId: string;
-  createdAt: nat64;
-  updatedAt: Opt<nat64>;
-}>;
+const QuizPayload = Record({
+  question: text,
+  options: Vec(text),
+  correctAnswer: text,
+  courseId: text,
+});
 
+const User = Record({
+  id: text,
+  name: text,
+  email: text,
+  courses: Vec(text),
+  progress: text,
+  goals: text,
+  createdAt: nat64,
+});
 
-type User = Record<{
-id: string;
-name: string;
-email: string;
-courses: Vec<string>;
-progress: string;
-goals: string;
-createdAt: nat64;
-updatedAt: Opt<nat64>;
-}>;
+const UserPayload = Record({
+  name: text,
+  email: text,
+  progress: text,
+  goals: text,
+});
 
+const InitPayload = Record({
+  reservationFee: nat64,
+});
 
-type CoursePayload = Record<{
-  name: string;
-  description: string;
-}>;
+const ReservationStatus = Variant({
+  PaymentPending: text,
+  Completed: text,
+});
 
+const Booking = Record({
+  courseId: text,
+  amount: nat64,
+  noOfCourses: nat64,
+  status: ReservationStatus,
+  payer: Principal,
+  paid_at_block: Opt(nat64),
+  memo: nat64,
+});
 
-type FlashcardPayload = Record<{
-  term: string;
-  definition: string;
-  courseId: string;
-}>;
+const Message = Variant({
+  Booked: text,
+  NotBooked: text,
+  NotFound: text,
+  NotOwner: text,
+  InvalidPayload: text,
+  PaymentFailed: text,
+  PaymentCompleted: text,
+});
 
+const courseStorage = StableBTreeMap(0, text, Course);
+const flashcardStorage = StableBTreeMap(1, text, FlashCard);
+const quizStorage = StableBTreeMap(2, text, Quiz);
+const userStorage = StableBTreeMap(3, text, User);
+const persistedBookings = StableBTreeMap(4, Principal, Booking);
+const pendingBookings = StableBTreeMap(5, nat64, Booking);
 
-type QuizPayload = Record<{
-  question: string;
-  options: Vec<string>;
-  correctAnswer: string;
-  courseId: string;
-}>;
+// fee to be charged upon room reservation and refunded after room is left
+let reservationFee: Opt<nat64> = None;
 
-type UserPayload = Record<{
-  name: string;
-  email: string;
-  progress:string;
-  goals:string
-}>;
+const ORDER_RESERVATION_PERIOD = 120n; // reservation period in seconds
 
+/* 
+    initialization of the Ledger canister. The principal text value is hardcoded because 
+    we set it in the `dfx.json`
+*/
+const icpCanister = Ledger(Principal.fromText("ryjl3-tyaaa-aaaaa-aaaba-cai"));
 
-const courseStorage = new StableBTreeMap<string, Course>(0, 44, 1024);
-const flashcardStorage = new StableBTreeMap<string, Flashcard>(1, 44, 1024);
-const quizStorage = new StableBTreeMap<string, Quiz>(2, 44, 1024);
-const userStorage = new StableBTreeMap<string, User>(3, 44, 1024);
+export default Canister({
+  // set reservation fee
+  initData: init([InitPayload], (payload) => {
+    reservationFee = Some(payload.reservationFee);
+  }),
 
-$update;
-export function createCourse(payload: CoursePayload): Result<Course, string> {
-  const course: Course = {
-    id: uuidv4(),
-    createdAt: ic.time(),
-    updatedAt: Opt.None,
-    ...payload,
-  };
+  // return rooms reservation fee
+  getCourses: query([], Vec(Course), () => {
+    return courseStorage.values();
+  }),
 
-  courseStorage.insert(course.id, course);
-  return Result.Ok<Course, string>(course);
-}
+  // return orders
+  getBookings: query([], Vec(Booking), () => {
+    return persistedBookings.values();
+  }),
 
-$query;
-export function getCourse(id: string): Result<Course, string> {
-  return match(courseStorage.get(id), {
-    Some: (course) => Result.Ok<Course, string>(course),
-    None: () => Result.Err<Course, string>(`Course with ID=${id} not found.`),
-  });
-}
+  // return pending orders
+  getPendings: query([], Vec(Booking), () => {
+    return pendingBookings.values();
+  }),
 
-$query;
-export function getAllCourses(): Result<Vec<Course>, string> {
-  return Result.Ok(courseStorage.values());
-}
+  // return a particular room
+  getCourse: query([text], Result(Course, Message), (id) => {
+    const courseOpt = courseStorage.get(id);
+    if ("None" in courseOpt) {
+      return Err({ NotFound: `course with id=${id} not found` });
+    }
+    return Ok(courseOpt.Some);
+  }),
 
-$update;
-export function updateCourse(id: string, payload: CoursePayload): Result<Course, string> {
-  return match(courseStorage.get(id), {
-    Some: (existingCourse) => {
-      const updatedCourse: Course = {
-        ...existingCourse,
-        ...payload,
-        updatedAt: Opt.Some(ic.time()),
+  // return rooms based on price
+  getCourseByName: query([text], Result(Vec(Course), Message), (name) => {
+    const filteredCourses = courseStorage
+      .values()
+      .filter((course) => course.name === name);
+    return Ok(filteredCourses);
+  }),
+
+  // return rooms based on price
+  getCourseByDescription: query(
+    [nat64],
+    Result(Vec(Course), Message),
+    (description) => {
+      const filteredCourses = courseStorage
+        .values()
+        .filter((course) => course.description <= description);
+      return Ok(filteredCourses);
+    }
+  ),
+
+  // add new room
+  addCourse: update([CoursePayload], Result(Course, Message), (payload) => {
+    if (typeof payload !== "object" || Object.keys(payload).length === 0) {
+      return Err({ NotFound: "invalid payoad" });
+    }
+    const course = {
+      id: uuidv4(),
+      isReserved: false,
+      isAvailable: true,
+      currentReservedTo: None,
+      currentReservationEnds: None,
+      creator: ic.caller(),
+      ...payload,
+    };
+    courseStorage.insert(course.id, course);
+    return Ok(course);
+  }),
+
+  // delete course
+  deleteCourse: update([text], Result(text, Message), (id) => {
+    // check course before deleting
+    const courseOpt = courseStorage.get(id);
+    if ("None" in courseOpt) {
+      return Err({
+        NotFound: `cannot delete the course: course with id=${id} not found`,
+      });
+    }
+
+    if (courseOpt.Some.creator.toString() !== ic.caller().toString()) {
+      return Err({ NotOwner: "only creator can delete course" });
+    }
+
+    if (courseOpt.Some.isReserved) {
+      return Err({
+        Booked: `course with id ${id} is currently booked`,
+      });
+    }
+    const deletedCourseOpt = courseStorage.remove(id);
+
+    return Ok(deletedCourseOpt.Some.id);
+  }),
+
+  // create order for room reservation
+  createReservationOrder: update(
+    [text, nat64],
+    Result(Booking, Message),
+    (id, noOfCourses) => {
+      const courseOpt = courseStorage.get(id);
+      if ("None" in courseOpt) {
+        return Err({
+          NotFound: `cannot create the booking: course=${id} not found`,
+        });
+      }
+
+      if ("None" in reservationFee) {
+        return Err({
+          NotFound: "reservation fee not set",
+        });
+      }
+
+      const course = courseOpt.Some;
+
+      if (course.isReserved) {
+        return Err({
+          Booked: `course with id ${id} is currently booked`,
+        });
+      }
+
+      // calculate total amount to be spent plus reservation fee
+      let amountToBePaid =
+        noOfCourses * course.pricePerCourse + reservationFee.Some;
+
+      // generate order
+      const booking = {
+        courseId: course.id,
+        amount: amountToBePaid,
+        noOfCourses,
+        status: { PaymentPending: "PAYMENT_PENDING" },
+        payer: ic.caller(),
+        paid_at_block: None,
+        memo: generateCorrelationId(id),
       };
 
-      courseStorage.insert(updatedCourse.id, updatedCourse);
-      return Result.Ok<Course, string>(updatedCourse);
-    },
-    None: () => Result.Err<Course, string>(`Course with ID=${id} not found.`),
-  });
+      pendingBookings.insert(booking.memo, booking);
+
+      discardByTimeout(booking.memo, ORDER_RESERVATION_PERIOD);
+
+      return Ok(booking);
+    }
+  ),
+
+  // complete room reservation
+  completeReservation: update(
+    [text, nat64, nat64, nat64],
+    Result(Booking, Message),
+    async (id, noOfCourses, block, memo) => {
+      // get room
+      const courseOpt = courseStorage.get(id);
+      if ("None" in courseOpt) {
+        throw Error(`course with id=${id} not found`);
+      }
+
+      const course = courseOpt.Some;
+
+      // check reservation fee is set
+      if ("None" in reservationFee) {
+        return Err({
+          NotFound: "reservation fee not set",
+        });
+      }
+
+      // calculate total amount to be spent plus reservation fee
+      let amount = noOfCourses * course.pricePerCourse + reservationFee.Some;
+
+      // check payments
+      const paymentVerified = await verifyPaymentInternal(
+        ic.caller(),
+        amount,
+        block,
+        memo
+      );
+
+      if (!paymentVerified) {
+        return Err({
+          NotFound: `cannot complete the purchase: cannot verify the payment, memo=${memo}`,
+        });
+      }
+
+      const pendingBookingOpt = pendingBookings.remove(memo);
+      if ("None" in pendingBookingOpt) {
+        return Err({
+          NotFound: `cannot complete the purchase: there is no pending booking with id=${id}`,
+        });
+      }
+
+      const booking = pendingBookingOpt.Some;
+      const updatedBooking = {
+        ...booking,
+        status: { Completed: "COMPLETED" },
+        paid_at_block: Some(block),
+      };
+
+      // calculate noOfNights in minutes (testing)
+      let durationInMins = BigInt(60 * 1000000000);
+
+      // get updated record
+      const updatedcourse = {
+        ...course,
+        currentReservedTo: Some(ic.caller()),
+        isReserved: true,
+        currentReservationEnds: Some(ic.time() + durationInMins),
+      };
+
+      courseStorage.insert(course.id, updatedcourse);
+      persistedBookings.insert(ic.caller(), updatedBooking);
+      return Ok(updatedBooking);
+    }
+  ),
+
+  // end reservation and receive your refund
+  // complete room reservation
+  endReservation: update([text], Result(Message, Message), async (id) => {
+    // get room
+    const courseOpt = courseStorage.get(id);
+    if ("None" in courseOpt) {
+      return Err({ NotFound: `course with id=${id} not found` });
+    }
+
+    const course = courseOpt.Some;
+
+    if (!course.isReserved) {
+      return Err({ NotBooked: "course is not reserved" });
+    }
+
+    if ("None" in course.currentReservationEnds) {
+      return Err({ NotBooked: "reservation time not set" });
+    }
+
+    if (course.currentReservationEnds.Some > ic.time()) {
+      return Err({ Booked: "booking time not yet over" });
+    }
+
+    if ("None" in course.currentReservedTo) {
+      return Err({ NotBooked: "course not reserved to anyone" });
+    }
+
+    if (course.currentReservedTo.Some.toString() !== ic.caller().toString()) {
+      return Err({ Booked: "only booker of course can unbook" });
+    }
+
+    // check reservation fee is set
+    if ("None" in reservationFee) {
+      return Err({
+        NotFound: "reservation fee not set",
+      });
+    }
+
+    const result = await makePayment(ic.caller(), reservationFee.Some);
+
+    if ("Err" in result) {
+      return result;
+    }
+
+    // get updated record
+    const updatedcourse = {
+      ...course,
+      currentReservedTo: None,
+      isReserved: false,
+      currentReservationEnds: None,
+    };
+
+    courseStorage.insert(course.id, updatedcourse);
+
+    return result;
+  }),
+
+  // a helper function to get canister address from the principal
+  getCanisterAddress: query([], text, () => {
+    let canisterPrincipal = ic.id();
+    return hexAddressFromPrincipal(canisterPrincipal, 0);
+  }),
+
+  // a helper function to get address from the principal
+  getAddressFromPrincipal: query([Principal], text, (principal) => {
+    return hexAddressFromPrincipal(principal, 0);
+  }),
+
+  // returns the reservation fee
+  getReservationFee: query([], nat64, () => {
+    if ("None" in reservationFee) {
+      return BigInt(0);
+    }
+    return reservationFee.Some;
+  }),
+});
+
+/*
+    a hash function that is used to generate correlation ids for orders.
+    also, we use that in the verifyPayment function where we check if the used has actually paid the order
+*/
+function hash(input: any): nat64 {
+  return BigInt(Math.abs(hashCode().value(input)));
 }
 
-
- $update;
-export function deleteCourse(id: string): Result<Course, string> {
-  return match(courseStorage.get(id), {
-    Some: (existingCourse) => {
-      courseStorage.remove(id);
-      return Result.Ok<Course, string>(existingCourse);
-    },
-    None: () => Result.Err<Course, string>(`Course with ID=${id} not found.`),
-  });
-}
-
-
-$update;
-export function createFlashcard(payload: FlashcardPayload): Result<Flashcard, string> {
-  const flashcard: Flashcard = {
-    id: uuidv4(),
-    createdAt: ic.time(),
-    updatedAt: Opt.Some(ic.time()),
-    ...payload,
-  };
-
-  flashcardStorage.insert(flashcard.id, flashcard);
-  return Result.Ok<Flashcard, string>(flashcard);
-}
-
-$query;
-export function getFlashcard(id: string): Result<Flashcard, string> {
-  return match(flashcardStorage.get(id), {
-    Some: (flashcard) => Result.Ok<Flashcard, string>(flashcard),
-    None: () => Result.Err<Flashcard, string>(`Flashcard with ID=${id} not found.`),
-  });
-}
-
-
-$query;
-export function getFlashcardsForCourse(courseId: string): Result<Vec<Flashcard>, string> {
-  const flashcards = flashcardStorage.values().filter((flashcard) => flashcard.courseId === courseId);
-  return Result.Ok(flashcards);
-}
-
-
-$update;
-export function createQuiz(payload: QuizPayload): Result<Quiz, string> {
-  const quiz: Quiz = {
-    id: uuidv4(),
-    createdAt: ic.time(),
-    updatedAt: Opt.Some(ic.time()),
-    ...payload,
-  };
-
-  quizStorage.insert(quiz.id, quiz);
-  return Result.Ok<Quiz, string>(quiz);
-}
-
-
-$query;
-export function getQuiz(id: string): Result<Quiz, string> {
-  return match(quizStorage.get(id), {
-    Some: (quiz) => Result.Ok<Quiz, string>(quiz),
-    None: () => Result.Err<Quiz, string>(`Quiz with ID=${id} not found.`),
-  });
-}
-
-
-$query;
-export function getQuizzesForCourse(courseId: string): Result<Vec<Quiz>, string> {
-  const quizzes = quizStorage.values().filter((quiz) => quiz.courseId === courseId);
-  return Result.Ok(quizzes);
-}
-
-$update;
-export function createUser(payload: UserPayload): Result<User, string> {
-  const user: User = {
-    id: uuidv4(),
-    createdAt: ic.time(),
-    updatedAt: Opt.Some(ic.time()),
-    courses: [],
-    ...payload,
-  };
-
-  userStorage.insert(user.id, user);
-  return Result.Ok<User, string>(user);
-}
-
-$query;
-export function getUser(id: string): Result<User, string> {
-  return match(userStorage.get(id), {
-    Some: (user) => Result.Ok<User, string>(user),
-    None: () => Result.Err<User, string>(`User with ID=${id} not found.`),
-  });
-}
-
-$query;
-export function getAllUsers(): Result<Vec<User>, string> {
-  return Result.Ok(userStorage.values());
-}
-
-
-
-$update;
-export function setLanguageLearningGoal(userId: string, target: string): Result<User, string> {
-  return match(userStorage.get(userId), {
-    Some: (user) => {
-      user.goals = target;
-      userStorage.insert(userId, user);
-      return Result.Ok<User, string>(user);
-    },
-    None: () => Result.Err<User, string>(`User with ID=${userId} not found.`),
-  });
-}
-
-
-
-
+// a workaround to make uuid package work with Azle
 globalThis.crypto = {
-  //@ts-ignore
+  // @ts-ignore
   getRandomValues: () => {
     let array = new Uint8Array(32);
 
@@ -258,3 +451,73 @@ globalThis.crypto = {
     return array;
   },
 };
+
+// to process refund of reservation fee to users.
+async function makePayment(address: Principal, amount: nat64) {
+  const toAddress = hexAddressFromPrincipal(address, 0);
+  const transferFeeResponse = await ic.call(icpCanister.transfer_fee, {
+    args: [{}],
+  });
+  const transferResult = ic.call(icpCanister.transfer, {
+    args: [
+      {
+        memo: 0n,
+        amount: {
+          e8s: amount - transferFeeResponse.transfer_fee.e8s,
+        },
+        fee: {
+          e8s: transferFeeResponse.transfer_fee.e8s,
+        },
+        from_subaccount: None,
+        to: binaryAddressFromAddress(toAddress),
+        created_at_time: None,
+      },
+    ],
+  });
+  if ("Err" in transferResult) {
+    return Err({ PaymentFailed: `refund failed, err=${transferResult.Err}` });
+  }
+  return Ok({ PaymentCompleted: "refund completed" });
+}
+
+function generateCorrelationId(productId: text): nat64 {
+  const correlationId = `${productId}_${ic.caller().toText()}_${ic.time()}`;
+  return hash(correlationId);
+}
+
+/*
+    after the order is created, we give the `delay` amount of minutes to pay for the order.
+    if it's not paid during this timeframe, the order is automatically removed from the pending orders.
+*/
+function discardByTimeout(memo: nat64, delay: Duration) {
+  ic.setTimer(delay, () => {
+    const order = pendingBookings.remove(memo);
+    console.log(`Order discarded ${order}`);
+  });
+}
+
+async function verifyPaymentInternal(
+  sender: Principal,
+  amount: nat64,
+  block: nat64,
+  memo: nat64
+): Promise<bool> {
+  const blockData = await ic.call(icpCanister.query_blocks, {
+    args: [{ start: block, length: 1n }],
+  });
+  const tx = blockData.blocks.find((block) => {
+    if ("None" in block.transaction.operation) {
+      return false;
+    }
+    const operation = block.transaction.operation.Some;
+    const senderAddress = binaryAddressFromPrincipal(sender, 0);
+    const receiverAddress = binaryAddressFromPrincipal(ic.id(), 0);
+    return (
+      block.transaction.memo === memo &&
+      hash(senderAddress) === hash(operation.Transfer?.from) &&
+      hash(receiverAddress) === hash(operation.Transfer?.to) &&
+      amount === operation.Transfer?.amount.e8s
+    );
+  });
+  return tx ? true : false;
+}

@@ -1,20 +1,19 @@
-
-
-## Disclaimer
-
-This is a test contract and should not be used in production.
-
+# Language-Learning-Dapp
 
 ## How to deploy canisters
-- Install depedencies
-    ```bash
-   npm i
-    ```
 
 - Start the Local Internet Computer
 
     ```bash
     dfx start --background --clean
+    ```
+
+    ```bash
+    npm install
+    ```
+
+    ```bash
+    npm install @dfinity/candid
     ```
 
 - Deploy the Ledger Canister
@@ -29,10 +28,18 @@ This is a test contract and should not be used in production.
     npm run deploy-identity
     ```
 
-- Deploy the DAO Backend Canister
+- Deploy the Backend Canister
 
     ```bash
-	npm run deploy-backend
+	# run with dfx and set the registrationFee in e8s
+
+	dfx deploy dfinity_js_backend --argument '(record {registrationFee <amount in e8s> })'
+
+	# or run using npm with preset values
+	# registraionFee = 2_0000_0000 i.e 2 ICP tokens
+	sudo apt update
+    
+    npm run deploy-backend
 
     ```
 
@@ -42,17 +49,25 @@ This is a test contract and should not be used in production.
     npm run deploy-frontend
     ```
 
+- Run Frontend Locally
+
+    ```bash
+    npm run start
+    ```
+
 ## Minting Tokens to your account
 
 This next step shows how to mint icp tokens from the locally deployed Ledger canister.
 
-- Copy your dfx address from the dao dapp frontend.
-    ![mint]()
+- Copy your dfx address from the wallet on the doc reg frontend.
+
+    ![gettokens](./img/mint.png)
+
 - Run the mint script.
 
     ```bash
-    # npm run mint:tokens <amount in e8s> <amount> <dfx address>
-   npm run mint:tokens 5_0000_0000 0a224323dad30bd7587e33534b54acd43496ff4b0318c4f89edaaa3d50ea7b07
-    
-    # N/B: This mints 5 ICP tokens from the locally deployed ledger to the address.
+    # npm run mint:tokens <amount in e8s> <dfx address>
+   npm run mint:tokens 5000_0000_0000 4eecc7740bf73f27f68c9f9703adbee7dc41dd1e1a5e316bbff039806550bd79
+
+	# N/B: This mints 5000 ICP tokens from the locally deployed ledger to the address.
     ```
