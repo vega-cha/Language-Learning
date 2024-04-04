@@ -47,7 +47,7 @@ This is a test contract and should not be used in production.
 This next step shows how to mint icp tokens from the locally deployed Ledger canister.
 
 - Copy your dfx address from the dao dapp frontend.
-    ![mint](./assets/images/mint-image.png)
+    ![mint]()
 - Run the mint script.
 
     ```bash
